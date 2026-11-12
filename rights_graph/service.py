@@ -8,15 +8,17 @@ from rights_graph.planner import plans, builds, artifacts, inspection, invalidat
 from rights_graph.planner.preview import PreviewEngine
 from rights_graph.planner.campaigns import Campaigns
 from rights_graph.planner.delivery import DeliveryDesk
+from rights_graph.privacy.desk import PrivacyDesk
 
 
 class RightsService:
-    def __init__(self, path=':memory:', **options):
+    def __init__(self, path=':memory:', *, noise=None, **options):
         self.store = Store(path, **options)
         self.preview = PreviewEngine(self.store)
         self.proposals = ProposalDesk(self.store)
         self.campaigns = Campaigns(self.store)
         self.deliveries = DeliveryDesk(self.store)
+        self.privacy = PrivacyDesk(self.store, noise=noise)
 
     def __enter__(self):
         return self
@@ -244,6 +246,39 @@ class RightsService:
         if operation == 'delivery.acknowledge_alert':
             fields(data, {'alert_id', 'recipient'})
             return self.deliveries.acknowledge_alert(**data)
+        if operation == 'privacy.domain.register':
+            fields(data, {'domain_id', 'period', 'subject_column', 'roster', 'epsilon_budget', 'sources'})
+            return self.privacy.register_domain(**data)
+        if operation == 'privacy.domain.get':
+            fields(data, {'domain_id'})
+            return self.privacy.get_domain(**data)
+        if operation == 'privacy.budget.status':
+            fields(data, {'domain_id'}, {'period'})
+            return self.privacy.budget_status(**data)
+        if operation == 'privacy.plan.register':
+            fields(data, {'plan_id', 'definition'})
+            return self.privacy.register_plan(**data)
+        if operation == 'privacy.plan.get':
+            fields(data, {'plan_id'})
+            return self.privacy.get_plan(**data)
+        if operation == 'privacy.plan.list':
+            fields(data, set(), {'domain_id'})
+            return self.privacy.list_plans(**data)
+        if operation == 'privacy.release':
+            fields(data, {'plan_id', 'context', 'epsilon', 'requester'})
+            return self.privacy.release(data['plan_id'], data['context'], data['epsilon'], requester=data['requester'])
+        if operation == 'privacy.release.get':
+            fields(data, {'release_id'})
+            return self.privacy.get_release(**data)
+        if operation == 'privacy.release.list':
+            fields(data, set(), {'domain_id'})
+            return self.privacy.list_releases(**data)
+        if operation == 'privacy.postprocess':
+            fields(data, {'post_id', 'release_id', 'steps'})
+            return self.privacy.postprocess(**data)
+        if operation == 'privacy.postprocess.get':
+            fields(data, {'post_id'})
+            return self.privacy.get_postprocessing(**data)
         if operation == 'audit.page':
             fields(data, set(), {'after', 'limit'})
             return audit.page(self.store, **data)

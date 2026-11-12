@@ -79,6 +79,9 @@ def parser():
     sub.add_parser('recovery-queue')
     demo = sub.add_parser('demo')
     demo.add_argument('--fixture', required=True)
+    privacy_demo = sub.add_parser('privacy-demo', help='Run the local differential privacy aggregate demonstration')
+    privacy_demo.add_argument('--fixture', required=True)
+    privacy_demo.add_argument('--seed', type=int, help='Test-only deterministic noise seed; omitted means system CSPRNG')
     return root
 
 
@@ -144,6 +147,81 @@ def demonstrate(service, fixture):
     return {'synthetic': True, 'target': fixture['target'], 'rows': preview['payload']['rows'], 'row_lineage': preview['payload']['row_lineage'], 'manifest_sha256': exported['authorization']['sha256'], 'uncommitted_artifacts': len(visible_before), 'revocation_blocked_export': not invalidated['valid'], 'integrity': check['ok']}
 
 
+def demonstrate_privacy(service, fixture, seed=None):
+    """Local exercise: overlapping subjects, budget exhaustion and revocation."""
+    fields(fixture, {'catalog', 'context', 'domain', 'batches', 'plans', 'releases', 'revoke_grant'})
+    from rights_graph.privacy.noise import DeterministicNoise
+    from rights_graph.primitives import GraphError
+    importing.import_catalog(service.store, fixture['catalog'])
+    for batch in fixture['batches']:
+        service.preview.data.import_rows(**batch)
+    domain_input = fixture['domain']
+    service.privacy.register_domain(**domain_input)
+    for key in ('count', 'sum', 'histogram'):
+        service.privacy.register_plan(**fixture['plans'][key])
+    context = fixture['context']
+    published = []
+    for item in fixture['releases']:
+        plan = fixture['plans'][item['key']]
+        release = service.privacy.release(plan['plan_id'], context, item['epsilon'], requester='demo-analyst')
+        published.append({
+            'key': item['key'], 'release_id': release['release_id'],
+            'epsilon': release['epsilon'], 'cell_count': len(release['payload']['cells']),
+            'sensitivity': release['payload']['sensitivity']['value'],
+            'noise_scale': release['payload']['noise']['scale'],
+            'cells': release['payload']['cells'],
+        })
+    budget = service.privacy.budget_status(domain_input['domain_id'])
+    domain = service.privacy.get_domain(domain_input['domain_id'])
+    # An identical request from another analyst reuses the same release and charges nothing.
+    first_plan = fixture['plans']['count']['plan_id']
+    reused = service.privacy.release(first_plan, context, fixture['releases'][0]['epsilon'], requester='another-analyst')
+    reused_free = service.privacy.budget_status(domain_input['domain_id'])['epsilon_spent'] == budget['epsilon_spent']
+    # A changed context is a different request; with no budget left it must fail atomically.
+    changed_context = {**context, 'at': '2026-12-01T00:00:00Z'}
+    exhaustion = None
+    try:
+        service.privacy.release(first_plan, changed_context, 0.1, requester='demo-analyst')
+    except GraphError as exc:
+        exhaustion = exc.json()
+    budget_after_refused = service.privacy.budget_status(domain_input['domain_id'])
+    # A deterministic, recorded postprocessing of a release while authorization is intact.
+    post = service.privacy.postprocess('demo-post', published[2]['release_id'], ['round_nearest_integer', 'clip_nonnegative'])
+    # Revocation: spending budget does not keep delivery rights alive.
+    from rights_graph.policy import grants
+    grant = grants.get(service.store, fixture['revoke_grant'])
+    grants.revoke(service.store, grant['grant_id'], grant['revision'], 'Synthetic source withdrawal')
+    retrieval = service.privacy.get_release(published[0]['release_id'])
+    audit_page = audit_safe(service)
+    leaked = any(any(token in json.dumps(entry, ensure_ascii=False) for token in ('"exact"', 'unnoised')) for entry in audit_page)
+    return {
+        'synthetic': True,
+        'randomness': 'injected_test_randomness' if seed is not None else 'system_csprng_laplace',
+        'domain': {'domain_id': domain_input['domain_id'], 'period': domain_input['period'],
+                   'roster_size': domain['roster_size'],
+                   'epsilon_budget': budget['epsilon_budget'], 'epsilon_spent': budget['epsilon_spent'],
+                   'epsilon_remaining': budget['epsilon_remaining']},
+        'releases': published,
+        'overlap_reuse': {'reused_release_id': reused['release_id'], 'charged_zero_epsilon': reused_free,
+                          'same_fingerprint': reused['release_id'] == published[0]['release_id']},
+        'budget_exhaustion': {'rejected': exhaustion is not None, 'error': exhaustion,
+                              'spent_unchanged_after_refusal': budget_after_refused['epsilon_spent'] == budget['epsilon_spent'],
+                              'no_new_release': len(service.privacy.list_releases(domain_input['domain_id'])) == len(published)},
+        'revocation': {'release_id': retrieval['release_id'],
+                       'retrieval_authorized': retrieval['authorization']['authorized'],
+                       'failures': retrieval['authorization']['failures']},
+        'postprocessing': {'post_id': post['post_id'], 'steps': post['steps'],
+                           'nonnegative': all(cell['value'] >= 0.0 for cell in post['payload']['cells'])},
+        'audit_does_not_leak_exact_values': not leaked,
+        'ordinary_delivery_entry_still_available': hasattr(service, 'deliveries'),
+    }
+
+
+def audit_safe(service):
+    from rights_graph.journal import audit
+    return audit.page(service.store, 0, 1000)
+
+
 def run(args, service):
     command = args.command
     if command == 'call':
@@ -181,13 +259,19 @@ def run(args, service):
         return recovery.queue(service.store)
     if command == 'demo':
         return demonstrate(service, read_json(args.fixture))
+    if command == 'privacy-demo':
+        return demonstrate_privacy(service, read_json(args.fixture), getattr(args, 'seed', None))
     reject('unknown_command', 'Unsupported command')
 
 
 def main(argv=None):
     args = parser().parse_args(argv)
     try:
-        with RightsService(args.db) as service:
+        noise = None
+        if getattr(args, 'command', None) == 'privacy-demo' and args.seed is not None:
+            from rights_graph.privacy.noise import DeterministicNoise
+            noise = DeterministicNoise(args.seed)
+        with RightsService(args.db, noise=noise) as service:
             result = run(args, service)
         write_json(result, args.output)
         if args.command == 'stream' and result['failed']:

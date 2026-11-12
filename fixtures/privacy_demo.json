@@ -1,0 +1,181 @@
+{
+  "catalog": {
+    "format": "rights-catalog",
+    "version": 1,
+    "assets": [
+      {
+        "asset_id": "detail_alpha",
+        "kind": "source",
+        "owner": "synthetic-owner",
+        "columns": [
+          {
+            "name": "subject_id",
+            "type": "string",
+            "classification": "restricted",
+            "nullable": false
+          },
+          {
+            "name": "region",
+            "type": "string",
+            "classification": "internal",
+            "nullable": false
+          },
+          {
+            "name": "amount",
+            "type": "decimal",
+            "classification": "restricted",
+            "nullable": false
+          }
+        ],
+        "description": "Synthetic partner detail table A"
+      },
+      {
+        "asset_id": "detail_beta",
+        "kind": "source",
+        "owner": "synthetic-owner",
+        "columns": [
+          {
+            "name": "subject_id",
+            "type": "string",
+            "classification": "restricted",
+            "nullable": false
+          },
+          {
+            "name": "region",
+            "type": "string",
+            "classification": "internal",
+            "nullable": false
+          },
+          {
+            "name": "amount",
+            "type": "decimal",
+            "classification": "restricted",
+            "nullable": false
+          }
+        ],
+        "description": "Synthetic partner detail table B"
+      }
+    ],
+    "grants": [
+      {
+        "grant_id": "grant-alpha",
+        "asset_id": "detail_alpha",
+        "policy": {
+          "purposes": ["research", "statistics"],
+          "regions": ["cn", "eu"],
+          "rights": ["read", "distribute"],
+          "valid_from": "2026-01-01T00:00:00Z",
+          "valid_until": "2027-01-01T00:00:00Z",
+          "obligations": [],
+          "columns": ["subject_id", "region", "amount"],
+          "max_depth": 4,
+          "allow_derivatives": true
+        }
+      },
+      {
+        "grant_id": "grant-beta",
+        "asset_id": "detail_beta",
+        "policy": {
+          "purposes": ["research", "statistics"],
+          "regions": ["cn", "eu"],
+          "rights": ["read", "distribute"],
+          "valid_from": "2026-01-01T00:00:00Z",
+          "valid_until": "2027-01-01T00:00:00Z",
+          "obligations": [],
+          "columns": ["subject_id", "region", "amount"],
+          "max_depth": 4,
+          "allow_derivatives": true
+        }
+      }
+    ],
+    "recipes": []
+  },
+  "context": {
+    "purpose": "research",
+    "region": "cn",
+    "right": "read",
+    "at": "2026-11-11T00:00:00Z",
+    "fulfilled_obligations": []
+  },
+  "domain": {
+    "domain_id": "domain-overlap",
+    "period": "period-2026-H2",
+    "subject_column": "subject_id",
+    "roster": ["S001", "S002", "S003", "S004", "S005", "S006", "S007", "S008"],
+    "epsilon_budget": 1.0,
+    "sources": [
+      {"asset_id": "detail_alpha", "batch_id": "batch-alpha"},
+      {"asset_id": "detail_beta", "batch_id": "batch-beta"}
+    ]
+  },
+  "batches": [
+    {
+      "batch_id": "batch-alpha",
+      "asset_id": "detail_alpha",
+      "version": 1,
+      "rows": [
+        {"subject_id": "S001", "region": "north", "amount": "12.50"},
+        {"subject_id": "S001", "region": "north", "amount": "7.50"},
+        {"subject_id": "S002", "region": "south", "amount": "20.00"},
+        {"subject_id": "S003", "region": "north", "amount": "5.00"},
+        {"subject_id": "S004", "region": "west", "amount": "999.00"},
+        {"subject_id": "S009", "region": "north", "amount": "8.00"}
+      ]
+    },
+    {
+      "batch_id": "batch-beta",
+      "asset_id": "detail_beta",
+      "version": 1,
+      "rows": [
+        {"subject_id": "S001", "region": "south", "amount": "4.00"},
+        {"subject_id": "S002", "region": "south", "amount": "16.00"},
+        {"subject_id": "S003", "region": "north", "amount": "6.00"},
+        {"subject_id": "S005", "region": "west", "amount": "30.00"},
+        {"subject_id": "S006", "region": "north", "amount": "10.00"}
+      ]
+    }
+  ],
+  "plans": {
+    "count": {
+      "plan_id": "plan-region-count",
+      "definition": {
+        "domain_id": "domain-overlap",
+        "metric": "count",
+        "groups": {"column": "region", "labels": ["north", "south", "west", "empty-isle"]},
+        "max_contributions": 1,
+        "description": "Distinct protected subjects per pre-registered region"
+      }
+    },
+    "sum": {
+      "plan_id": "plan-region-sum",
+      "definition": {
+        "domain_id": "domain-overlap",
+        "metric": "sum",
+        "groups": {"column": "region", "labels": ["north", "south", "west", "empty-isle"]},
+        "max_contributions": 1,
+        "value_column": "amount",
+        "clamp": {"low": 0.0, "high": 50.0},
+        "raw_domain": {"low": 0.0, "high": 1000.0},
+        "description": "Clipped per-subject average contribution per region"
+      }
+    },
+    "histogram": {
+      "plan_id": "plan-amount-histogram",
+      "definition": {
+        "domain_id": "domain-overlap",
+        "metric": "histogram",
+        "groups": {"column": "region", "labels": ["north", "south", "west", "empty-isle"]},
+        "max_contributions": 1,
+        "value_column": "amount",
+        "histogram": {"edges": [0.0, 10.0, 20.0, 50.0], "include_overflow": true},
+        "description": "Per-subject amount vote histogram with overflow bin"
+      }
+    }
+  },
+  "releases": [
+    {"key": "count", "epsilon": 0.4},
+    {"key": "sum", "epsilon": 0.35},
+    {"key": "histogram", "epsilon": 0.25}
+  ],
+  "revoke_grant": "grant-alpha"
+}
